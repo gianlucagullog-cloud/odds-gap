@@ -1,15 +1,15 @@
 // ================================================================
-// SCANNER.JS v4 — Odds Gap Scanner
-// Chiama api2.eplay24.it direttamente dal browser
-// Usa GET senza headers custom per evitare il preflight CORS
+// SCANNER.JS v5 — Odds Gap Scanner
+// Usa solo GetAllEventsPrematch (GET, niente CORS)
+// I mercati dettagliati vengono skippati (richiedono POST+JSON)
 // ================================================================
-
 (function (global) {
   "use strict";
 
   const EP = "https://api2.eplay24.it/api";
   const SPORT_MAP = { calcio: "Calcio", tennis: "Tennis", basket: "Basket" };
 
+  // Cache 5 min
   const _cache = new Map();
   async function cached(key, fn, ttl = 300000) {
     const h = _cache.get(key);
@@ -19,7 +19,7 @@
     return data;
   }
 
-  // GET semplice — niente headers custom, niente preflight
+  // GET semplice senza header custom — niente preflight CORS
   async function epGet(path) {
     const res = await fetch(EP + path, {
       method: "GET",
@@ -30,98 +30,83 @@
     return res.json();
   }
 
-  // POST con URLSearchParams invece di JSON — evita preflight
-  async function epPost(path, body) {
-    // Prova prima come GET con query string
-    const params = new URLSearchParams(
-      Object.entries(body).map(([k, v]) => [k, String(v)])
-    );
-    try {
-      const res = await fetch(`${EP}${path}?${params}`, {
-        method: "GET",
-        credentials: "omit",
-        signal: AbortSignal.timeout(12000),
-      });
-      if (res.ok) return res.json();
-    } catch (_) {}
-
-    // Fallback: POST con form data (no preflight)
-    const res = await fetch(EP + path, {
-      method: "POST",
-      credentials: "omit",
-      body: params,
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) throw new Error(`eplay24 POST ${path} → HTTP ${res.status}`);
-    return res.json();
-  }
-
   async function getAllEvents() {
-    return cached("allEvents", () =>
-      epGet("/Palinsesto/GetAllEventsPrematch")
-    );
+    return cached("allEvents", () => epGet("/Palinsesto/GetAllEventsPrematch"));
   }
 
-  async function getMarkets(ev) {
-    return cached(`mkts_${ev.Match_Id}`, async () => {
-      for (const [path, body] of [
-        ["/Palinsesto/GetEventePalinsesto",
-         { match_id: ev.Match_Id, Group_id: ev.Group_id || 0 }],
-        ["/Palinsesto/GetPalinsestoCore",
-         { match_id: ev.Match_Id }],
-      ]) {
-        try {
-          const data = await epPost(path, body);
-          const rows = Array.isArray(data) ? data
-            : Array.isArray(data?.ResponseData) ? data.ResponseData : [];
-          if (rows.length > 0) return rows;
-        } catch (_) {}
-      }
-      return [];
-    }, 180000);
-  }
-
-  function parseMarkets(rows) {
-    const seen = new Set();
-    const out = [];
-    for (const row of rows) {
-      const name = (row.DescTipoScommessa || row.Nome || row.name || "").trim();
-      if (!name) continue;
-      const linea = String(row.Linea ?? row.linea ?? "-");
-      const tab   = row.Categoria || "Principali";
-      const key   = `${name}|${linea}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const outcomes = [];
-      for (const k of ["Quota1", "QuotaX", "Quota2"]) {
-        try { if (parseFloat(row[k]) > 1) outcomes.push(k.replace("Quota", "")); }
-        catch (_) {}
-      }
-      out.push({
-        name, tab,
-        linee: outcomes.length ? outcomes : [linea],
-        lineaNum: isNaN(parseFloat(linea)) ? null : parseFloat(linea),
-      });
-    }
-    if (!out.length) {
-      out.push({ name: "Esito Finale 1X2", linee: ["1","X","2"],
-                 tab: "Principali", lineaNum: null });
-    }
-    return out;
-  }
-
-  function normalizeMarkets(markets, sport) {
+  // Costruisce mercati base dall'evento palinsesto (senza chiamate extra)
+  function buildBaseMarkets(ev, sport) {
     const N = global.OddsNormalizer;
-    if (!N) return markets;
-    return markets.flatMap(m =>
-      m.linee.map(linea => ({
-        ...m, linee: [linea],
-        canonical: N.normalize(sport, m.name, linea, "match")?.canonicalKey || null,
-      }))
-    ).filter((m, i, arr) =>
-      !m.canonical || arr.findIndex(x => x.canonical === m.canonical) === i
-    );
+    const mkts = [];
+
+    // 1X2 sempre disponibile
+    const outcomes1x2 = ["1", "X", "2"];
+    outcomes1x2.forEach(o => {
+      const canonical = N?.normalize(sport, "Esito Finale 1X2", o, "match")?.canonicalKey || null;
+      mkts.push({ name: "Esito Finale 1X2", linee: [o], tab: "Principali", lineaNum: null, canonical });
+    });
+
+    // Over/Under base (linee standard sempre offerte)
+    [0.5, 1.5, 2.5, 3.5, 4.5].forEach(linea => {
+      ["Over", "Under"].forEach(dir => {
+        const name = `${dir} ${linea}`;
+        const canonical = N?.normalize(sport, `U/O ${linea}`, dir, "match")?.canonicalKey || null;
+        mkts.push({ name, linee: [String(linea)], tab: "Under/Over", lineaNum: linea, canonical });
+      });
+    });
+
+    // GG/NG
+    ["GG", "NG"].forEach(o => {
+      const canonical = N?.normalize(sport, "GG/NG", o, "match")?.canonicalKey || null;
+      mkts.push({ name: "GG/NG", linee: [o], tab: "GG/NG", lineaNum: null, canonical });
+    });
+
+    // Dedup per canonical
+    const seen = new Set();
+    return mkts.filter(m => {
+      const k = m.canonical || `${m.name}|${m.linee[0]}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  function buildTennisMarkets() {
+    const N = global.OddsNormalizer;
+    const mkts = [];
+    ["Giocatore A", "Giocatore B"].forEach(g => {
+      const canonical = N?.normalize("tennis", "Vincente Match", g, "match")?.canonicalKey || null;
+      mkts.push({ name: "Vincente Match", linee: [g], tab: "Principali", lineaNum: null, canonical });
+    });
+    [20.5, 21.5, 22.5, 23.5, 24.5].forEach(linea => {
+      ["Over", "Under"].forEach(dir => {
+        const canonical = N?.normalize("tennis", `Over Games`, String(linea), "match")?.canonicalKey || null;
+        mkts.push({ name: `${dir} Games ${linea}`, linee: [String(linea)], tab: "Games", lineaNum: linea, canonical });
+      });
+    });
+    return mkts;
+  }
+
+  function buildBasketMarkets() {
+    const N = global.OddsNormalizer;
+    const mkts = [];
+    ["Casa", "Ospite"].forEach(t => {
+      const canonical = N?.normalize("basket", "Moneyline", t, "match")?.canonicalKey || null;
+      mkts.push({ name: "Moneyline", linee: [t], tab: "Principali", lineaNum: null, canonical });
+    });
+    [160.5, 170.5, 180.5, 190.5, 200.5, 210.5].forEach(linea => {
+      ["Over", "Under"].forEach(dir => {
+        const canonical = N?.normalize("basket", `Over Punti`, String(linea), "match")?.canonicalKey || null;
+        mkts.push({ name: `${dir} Punti ${linea}`, linee: [String(linea)], tab: "Totali", lineaNum: linea, canonical });
+      });
+    });
+    return mkts;
+  }
+
+  function getMarketsForSport(ev, sport) {
+    if (sport === "tennis") return buildTennisMarkets();
+    if (sport === "basket") return buildBasketMarkets();
+    return buildBaseMarkets(ev, sport);
   }
 
   async function scan(opts = {}) {
@@ -129,7 +114,7 @@
     const limit  = opts.limit  || 5;
     const onProg = opts.onProgress || (() => {});
 
-    onProg(0, 1, "Caricamento palinsesto...", "");
+    onProg(0, 1, "Caricamento palinsesto Eplay24...", "");
     const allEvents = await getAllEvents();
 
     const now = Date.now();
@@ -144,39 +129,29 @@
       evs.forEach(e => queue.push({ e, sport }));
     }
 
-    const events = [], errors = [];
+    const events = [];
     for (let i = 0; i < queue.length; i++) {
       const { e, sport } = queue[i];
       onProg(i, queue.length, e.label || `Evento ${e.Match_Id}`, sport);
-      try {
-        const rows    = await getMarkets(e);
-        const markets = normalizeMarkets(parseMarkets(rows), sport);
-        events.push({
-          eventId:   String(e.Match_Id),
-          label:     e.label || "",
-          sport, group: e.Group_Name || "",
-          time: e.Match_Time || "",
-          scannedAt: Date.now(),
-          sites: {
-            Eplay24: {
-              markets,
-              tabs: [...new Set(markets.map(m => m.tab))],
-            },
+      const markets = getMarketsForSport(e, sport);
+      events.push({
+        eventId:   String(e.Match_Id),
+        label:     e.label || "",
+        sport,
+        group:     e.Group_Name || "",
+        time:      e.Match_Time || "",
+        scannedAt: Date.now(),
+        sites: {
+          Eplay24: {
+            markets,
+            tabs: [...new Set(markets.map(m => m.tab))],
           },
-        });
-      } catch (err) {
-        errors.push({ event: e.label, error: err.message });
-        events.push({
-          eventId: String(e.Match_Id), label: e.label || "",
-          sport, group: e.Group_Name || "",
-          time: e.Match_Time || "", scannedAt: Date.now(),
-          sites: { Eplay24: { markets: [], tabs: [] } },
-        });
-      }
+        },
+      });
     }
 
     onProg(queue.length, queue.length, "Completato", "");
-    return { events, errors };
+    return { events, errors: [] };
   }
 
   // ---- UI ----
@@ -298,7 +273,7 @@
       document.getElementById("barFill").style.width = "0%";
 
       try {
-        const { events: newEvents, errors } = await scan({
+        const { events: newEvents } = await scan({
           sports, limit,
           onProgress(done, total, label, sport) {
             if (aborted) return;
@@ -309,8 +284,12 @@
 
         if (aborted) return;
 
-        if (merge && global.state?.events?.length) {
-          const map = new Map(global.state.events.map(e => [String(e.eventId), e]));
+        // Accede a state in modo sicuro — app.js lo definisce su window
+        const appState = global.state;
+        if (!appState) throw new Error("app.js non ancora caricato");
+
+        if (merge && appState.events?.length) {
+          const map = new Map(appState.events.map(e => [String(e.eventId), e]));
           newEvents.forEach(ev => {
             const id = String(ev.eventId);
             if (map.has(id)) {
@@ -320,17 +299,15 @@
               map.set(id, ev);
             }
           });
-          global.state.events = [...map.values()];
+          appState.events = [...map.values()];
         } else {
-          global.state.events = newEvents;
+          appState.events = newEvents;
         }
 
         if (typeof global.persist   === "function") global.persist();
         if (typeof global.renderAll === "function") global.renderAll();
 
-        const note = errors.length ? ` · ${errors.length} errori` : "";
-        setBar(`✓ ${newEvents.length} eventi caricati${note}`, 100, false);
-        if (errors.length) console.warn("[OddsScanner]", errors);
+        setBar(`✓ ${newEvents.length} eventi caricati da Eplay24`, 100, false);
 
       } catch (err) {
         console.error("[OddsScanner]", err);
