@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Odds Gap Scanner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">OG</div>
+        <div>
+          <h1>Odds Gap Scanner</h1>
+          <p>Marathonbet coverage desk</p>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Viste">
+        <button class="nav-item active" data-view="dashboard" title="Dashboard">Dashboard</button>
+        <button class="nav-item" data-view="events" title="Eventi">Eventi</button>
+        <button class="nav-item" data-view="markets" title="Mercati">Mercati</button>
+        <button class="nav-item" data-view="normalizer" title="Normalizer">Normalizer</button>
+        <button class="nav-item" data-view="catalog" title="Catalogo">Catalogo</button>
+      </nav>
+
+      <div class="side-panel">
+        <label for="targetBookmaker">Target</label>
+        <select id="targetBookmaker">
+          <option>Marathonbet</option>
+        </select>
+      </div>
+
+      <div class="side-panel compact">
+        <span class="muted">Catalogo</span>
+        <strong id="catalogCount">0 mercati</strong>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="toolbar">
+          <label class="file-btn" title="Importa JSON scanner">
+            <input id="jsonFile" type="file" accept="application/json,.json">
+            Importa JSON
+          </label>
+          <button id="sampleBtn" class="ghost-btn" title="Carica dati demo">Demo</button>
+          <button id="exportMissingBtn" class="ghost-btn primary-export" title="Scarica solo i mercati mancanti su Marathonbet">Mercati mancanti MB</button>
+          <button id="exportCsvBtn" class="ghost-btn" title="Esporta CSV della vista corrente">CSV vista</button>
+          <button id="exportJsonBtn" class="ghost-btn" title="Esporta JSON">JSON</button>
+          <button id="clearBtn" class="danger-btn" title="Svuota dati">Svuota</button>
+        </div>
+        <div class="searchbar">
+          <input id="searchInput" type="search" placeholder="Cerca evento, torneo, mercato">
+        </div>
+      </header>
+
+      <section id="dashboard" class="view active">
+        <div class="kpi-grid">
+          <article class="kpi"><span>Eventi</span><strong id="kpiEvents">0</strong></article>
+          <article class="kpi"><span>Gap target</span><strong id="kpiMissing">0</strong></article>
+          <article class="kpi"><span>Mercati altri</span><strong id="kpiOthers">0</strong></article>
+          <article class="kpi"><span>Copertura</span><strong id="kpiCoverage">0%</strong></article>
+        </div>
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Priorità eventi</h2>
+              <select id="sportFilter">
+                <option value="all">Tutti gli sport</option>
+                <option value="calcio">Calcio</option>
+                <option value="tennis">Tennis</option>
+                <option value="basket">Basket</option>
+              </select>
+            </div>
+            <div id="priorityList" class="event-list"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Gap per categoria</h2>
+              <select id="categorySportFilter">
+                <option value="all">Tutti</option>
+                <option value="calcio">Calcio</option>
+                <option value="tennis">Tennis</option>
+                <option value="basket">Basket</option>
+              </select>
+            </div>
+            <div id="categoryBreakdown" class="breakdown"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="events" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Eventi scansionati</h2>
+            <div class="segmented" id="eventSegment">
+              <button class="active" data-filter="all">Tutti</button>
+              <button data-filter="gap">Con gap</button>
+              <button data-filter="notFound">Target assente</button>
+            </div>
+          </div>
+          <div id="eventsList" class="event-list"></div>
+        </div>
+      </section>
+
+      <section id="markets" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Mercati mancanti</h2>
+            <div class="panel-actions">
+              <button id="exportMissingPanelBtn" class="ghost-btn primary-export" title="Scarica solo i mercati mancanti su Marathonbet">Scarica file</button>
+              <select id="marketSort">
+                <option value="event">Ordina per evento</option>
+                <option value="category">Ordina per categoria</option>
+                <option value="sport">Ordina per sport</option>
+              </select>
+            </div>
+          </div>
+          <div id="marketsTable" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <section id="normalizer" class="view">
+        <div class="panel form-panel">
+          <div class="panel-head">
+            <h2>Normalizer mercati</h2>
+            <button id="addMarketBtn" class="ghost-btn" title="Aggiungi ai dati correnti">Aggiungi</button>
+          </div>
+          <div class="form-grid">
+            <label>Sport
+              <select id="normSport">
+                <option value="calcio">Calcio</option>
+                <option value="tennis">Tennis</option>
+                <option value="basket">Basket</option>
+              </select>
+            </label>
+            <label>Bookmaker
+              <input id="normBookmaker" value="Eplay24">
+            </label>
+            <label>Evento
+              <input id="normEvent" value="Demo Match">
+            </label>
+            <label>Mercato grezzo
+              <input id="normName" value="Over/Under Gol">
+            </label>
+            <label>Linea/outcome
+              <input id="normLine" value="Over 2.5">
+            </label>
+            <label>Target
+              <input id="normTarget" value="match">
+            </label>
+          </div>
+          <div id="normResult" class="normalizer-result"></div>
+        </div>
+      </section>
+
+      <section id="catalog" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Catalogo mercati</h2>
+            <select id="catalogSportFilter">
+              <option value="all">Tutti</option>
+              <option value="calcio">Calcio</option>
+              <option value="tennis">Tennis</option>
+              <option value="basket">Basket</option>
+            </select>
+          </div>
+          <div id="catalogTable" class="table-wrap"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="normalizer.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
